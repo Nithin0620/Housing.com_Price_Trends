@@ -1,5 +1,4 @@
 import json
-import re
 
 
 def extract_initial_state(html):

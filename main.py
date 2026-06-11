@@ -1,11 +1,10 @@
 import sys
-import time
+from datetime import datetime
 from pathlib import Path
 
 from scraper.fetcher import PageFetcher
 from scraper.city_scraper import CityScraper
 from scraper.output_writer import write_combined_csv
-from scraper.city_list_scraper import scrape_city_list, write_cities_csv
 from proxies.proxy_manager import ProxyManager
 
 
@@ -39,25 +38,8 @@ def main():
     parser.add_argument("--no-csv", action="store_true", help="Skip CSV output (DB only)")
     parser.add_argument("--db", action="store_true", help="Push to database")
     parser.add_argument("--db-url", help="PostgreSQL connection string (overrides env)")
-    parser.add_argument("--discover", metavar="CITIES_TXT", nargs="?", const="data/cities.txt",
-                        help="Discover price trend URLs from city landing pages")
 
     args = parser.parse_args()
-
-    if args.discover:
-        proxy_mgr = ProxyManager(args.proxy_file) if args.proxy_file else ProxyManager()
-        print("Discovering price trend URLs from city landing pages...")
-        results = scrape_city_list(
-            cities_txt_path=args.discover,
-            delay=max(args.delay, 3.0),
-            output_dir=args.output,
-            proxy_manager=proxy_mgr,
-        )
-        csv_path = write_cities_csv(results, args.output)
-        print(f"\n  > Results written to {csv_path}")
-        found = sum(1 for r in results if r.get("price_trend_url"))
-        print(f"  > {found}/{len(results)} cities resolved")
-        return
 
     urls = args.urls or [
         "https://housing.com/price-trends/property-rates-for-buy-in-new_delhi_india-P6xfqdsey6cc3d95h"
@@ -72,7 +54,7 @@ def main():
         db_mgr = DatabaseManager()
         if args.db_url:
             import os
-            os.environ["DB_URL"] = args.db_url
+            os.environ["DATABASE_URL"] = args.db_url
         if db_mgr.connect():
             db_mgr.ensure_tables()
             print("  [DB] Connected and tables ready")
@@ -86,19 +68,8 @@ def main():
             if db_mgr:
                 for product, result in results.items():
                     print(f"  [DB] Inserting {product} data...")
-                    db_mgr.insert_city_summary(result["summary"])
-                    db_mgr.insert_city_trends(
-                        result["city_name"],
-                        result["product"],
-                        result["summary"].get("property_type_trends", {}),
-                    )
-                    db_mgr.insert_localities(
-                        result["city_name"], result["product"], result["localities"]
-                    )
-                    db_mgr.insert_locality_trends(
-                        result["city_name"], result["product"], result["localities"]
-                    )
-                    db_mgr.insert_housing_price_trends(result)
+                    result["scrape_timestamp"] = datetime.now().strftime("%H_%M_%S_%d_%m__%y")
+                    db_mgr.insert_scrape_result(result)
                 print("  [DB] Done")
 
         except Exception as e:

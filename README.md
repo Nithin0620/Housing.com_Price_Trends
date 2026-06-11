@@ -27,6 +27,9 @@ Generates timestamped CSV files: `Housing.com_price_trends_{buy|rent}_HH_MM_SS_D
 ## Usage
 
 ```bash
+#Stage 1 
+python scripts/extract_all_city_urls.py --pretty
+
 # Scrape default (New Delhi buy), save CSV
 python main.py
 

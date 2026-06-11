@@ -14,7 +14,7 @@ class DatabaseManager:
     def __init__(self, env_file=None):
         self.conn = None
         if env_file is None:
-            env_file = Path(__file__).parent.parent / ".env"
+            env_file = Path(__file__).resolve().parent.parent / ".env"
         self.env_file = Path(env_file)
         self._load_env()
 
@@ -32,14 +32,14 @@ class DatabaseManager:
             print("  [DB] psycopg2 not installed. Skipping DB.")
             return False
 
-        db_url = os.getenv("DB_URL", "")
+        db_url = os.getenv("DATABASE_URL") or os.getenv("DB_URL") or ""
         if db_url:
             try:
                 self.conn = psycopg2.connect(db_url)
                 self.conn.autocommit = True
                 return True
             except Exception as e:
-                print(f"  [DB] Connection with DB_URL failed: {e}")
+                print(f"  [DB] Connection failed: {e}")
                 return False
 
         try:
@@ -56,197 +56,194 @@ class DatabaseManager:
             print(f"  [DB] Connection failed: {e}")
             return False
 
-    def insert_city_summary(self, summary):
-        if not self.conn:
-            return
-        with self.conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO city_summary (city, product, avg_price_per_sqft, min_price, max_price, total_listings)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (city, product) DO UPDATE SET
-                    avg_price_per_sqft=EXCLUDED.avg_price_per_sqft,
-                    min_price=EXCLUDED.min_price,
-                    max_price=EXCLUDED.max_price,
-                    total_listings=EXCLUDED.total_listings,
-                    scrape_date=NOW()
-            """, (summary["city"], summary["product"], summary["avg_price_per_sqft"],
-                  summary["min_price"], summary["max_price"], summary["total_listings"]))
-
-    def insert_city_trends(self, city, product, trends_by_type):
-        if not self.conn or not trends_by_type:
-            return
-        with self.conn.cursor() as cur:
-            for type_name, trend_data in trends_by_type.items():
-                for quarter, price in trend_data["quarterly_trend"]:
-                    cur.execute("""
-                        INSERT INTO city_trends (city, product, property_type, property_type_id, quarter, price)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (city, product, property_type_id, quarter) DO UPDATE SET
-                            price=EXCLUDED.price, scrape_date=NOW()
-                    """, (city, product, type_name, trend_data["property_type_id"], quarter, price))
-
-    def insert_localities(self, city, product, localities):
-        if not self.conn or not localities:
-            return
-        with self.conn.cursor() as cur:
-            for loc in localities:
-                cur.execute("""
-                    INSERT INTO locality_data (city, product, locality_name, property_type,
-                        property_type_id, min_price, max_price, avg_price, total_listings, locality_url)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (city, product, loc["locality_name"], loc["property_type"],
-                      loc["property_type_id"], loc["min_price"], loc["max_price"],
-                      loc["avg_price"], loc["total_listings"], loc.get("locality_url", "")))
-
-    def insert_locality_trends(self, city, product, localities):
-        if not self.conn or not localities:
-            return
-        with self.conn.cursor() as cur:
-            for loc in localities:
-                trend = loc.get("locality_trend")
-                if not trend:
-                    continue
-                for quarter, price in trend:
-                    cur.execute("""
-                        INSERT INTO locality_trends (locality_name, city, product, property_type,
-                            property_type_id, quarter, price)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (locality_name, city, product, property_type_id, quarter) DO UPDATE SET
-                            price=EXCLUDED.price, scrape_date=NOW()
-                    """, (loc["locality_name"], city, product, loc["property_type"],
-                          loc["property_type_id"], quarter, price))
-
     def ensure_tables(self):
         if not self.conn:
             return
         with self.conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.housingcom_pricetrend_url')")
+            exists = cur.fetchone()[0] is not None
+            if exists:
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns
+                        WHERE table_name='housingcom_pricetrend_url' AND column_name='service'
+                    )
+                """)
+                if cur.fetchone()[0]:
+                    print("  [DB] Migrating housingcom_pricetrend_url (old schema -> new)")
+                    cur.execute("DROP TABLE housingcom_pricetrend_url CASCADE")
+                    cur.execute("""
+                        CREATE TABLE housingcom_pricetrend_url (
+                            id SERIAL PRIMARY KEY,
+                            city_name TEXT NOT NULL UNIQUE,
+                            price_trend_url TEXT NOT NULL,
+                            city_page_url TEXT,
+                            scrape_timestamp TEXT DEFAULT '',
+                            scraped_at TIMESTAMP DEFAULT NOW()
+                        )
+                    """)
+            else:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS housingcom_pricetrend_url (
+                        id SERIAL PRIMARY KEY,
+                        city_name TEXT NOT NULL UNIQUE,
+                        price_trend_url TEXT NOT NULL,
+                        city_page_url TEXT,
+                        scrape_timestamp TEXT DEFAULT '',
+                        scraped_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS city_summary (
+                CREATE TABLE IF NOT EXISTS housingcom_pricetrend_data (
                     id SERIAL PRIMARY KEY,
-                    city TEXT, product TEXT, avg_price_per_sqft TEXT,
-                    min_price TEXT, max_price TEXT, total_listings TEXT,
-                    scrape_date TIMESTAMP DEFAULT NOW(),
-                    UNIQUE(city, product)
+                    city TEXT NOT NULL,
+                    product TEXT NOT NULL,
+                    record_type TEXT,
+                    locality_name TEXT DEFAULT '',
+                    property_type TEXT DEFAULT '',
+                    avg_price_per_sqft TEXT DEFAULT '',
+                    min_price TEXT DEFAULT '',
+                    max_price TEXT DEFAULT '',
+                    total_listings TEXT DEFAULT '',
+                    locality_url TEXT DEFAULT '',
+                    has_trend_data TEXT DEFAULT '',
+                    trend_raw JSONB,
+                    scrape_timestamp TEXT DEFAULT '',
+                    scraped_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(city, product, record_type, locality_name, property_type)
                 );
             """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS city_trends (
-                    id SERIAL PRIMARY KEY,
-                    city TEXT, product TEXT, property_type TEXT,
-                    property_type_id INT, quarter TEXT, price NUMERIC,
-                    scrape_date TIMESTAMP DEFAULT NOW(),
-                    UNIQUE(city, product, property_type_id, quarter)
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS locality_data (
-                    id SERIAL PRIMARY KEY,
-                    city TEXT, product TEXT, locality_name TEXT,
-                    property_type TEXT, property_type_id INT,
-                    min_price TEXT, max_price TEXT, avg_price TEXT,
-                    total_listings TEXT, locality_url TEXT,
-                    scrape_date TIMESTAMP DEFAULT NOW()
-                );
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS locality_trends (
-                    id SERIAL PRIMARY KEY,
-                    locality_name TEXT, city TEXT, product TEXT,
-                    property_type TEXT, property_type_id INT,
-                    quarter TEXT, price NUMERIC,
-                    scrape_date TIMESTAMP DEFAULT NOW(),
-                    UNIQUE(locality_name, city, product, property_type_id, quarter)
-                );
-            """)
+            print("  [DB] Tables ensured")
 
-    def insert_housing_price_trends(self, result):
+    def insert_city_url(self, city_name, price_trend_url, city_page_url):
+        if not self.conn:
+            return False
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO housingcom_pricetrend_url (city_name, price_trend_url, city_page_url)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (city_name) DO NOTHING
+            """, (city_name, price_trend_url, city_page_url))
+            return cur.rowcount > 0
+
+    def get_all_city_urls(self):
+        if not self.conn:
+            return []
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT city_name, price_trend_url, city_page_url
+                FROM housingcom_pricetrend_url
+                ORDER BY city_name
+            """)
+            return cur.fetchall()
+
+    def has_city_data(self, city, product):
+        if not self.conn:
+            return False
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT 1 FROM housingcom_pricetrend_data
+                WHERE city = %s AND product = %s
+                LIMIT 1
+            """, (city, product))
+            return cur.fetchone() is not None
+
+    def _insert_price_trend_row(self, data):
         if not self.conn:
             return
-        from datetime import datetime
-        ts = datetime.now().strftime("%H_%M_%S_%d_%m__%y")
-        product = result["product"]
-        table_name = f"Housing_com_price_trends_{product}_{ts}"
-
-        city_name = result["city_name"]
-        summary = result["summary"]
-        localities = result["localities"]
-
         with self.conn.cursor() as cur:
-            cur.execute(f"""
-                CREATE TABLE IF NOT EXISTS {table_name} (
-                    id SERIAL PRIMARY KEY,
-                    record_type TEXT,
-                    city TEXT,
-                    product TEXT,
-                    locality_name TEXT,
-                    property_type TEXT,
-                    avg_price_per_sqft TEXT,
-                    min_price TEXT,
-                    max_price TEXT,
-                    total_listings TEXT,
-                    locality_url TEXT,
-                    has_trend_data TEXT,
-                    trend_raw JSONB,
-                    scrape_timestamp TEXT
-                );
-            """)
-
-            for pt_name, pt_data in summary.get("property_type_trends", {}).items():
-                trend = pt_data.get("quarterly_trend", [])
-                cur.execute(f"""
-                    INSERT INTO {table_name}
-                        (record_type, city, product, property_type,
-                         avg_price_per_sqft, min_price, max_price, total_listings,
-                         trend_raw, scrape_timestamp)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    "city_trend", city_name, product, pt_name,
-                    summary.get("avg_price_per_sqft", ""),
-                    summary.get("min_price", ""),
-                    summary.get("max_price", ""),
-                    summary.get("total_listings", ""),
-                    json.dumps(trend) if trend else None,
-                    ts,
-                ))
-
-            cur.execute(f"""
-                INSERT INTO {table_name}
-                    (record_type, city, product, property_type,
+            trend_raw = json.dumps(data["trend_raw"]) if data.get("trend_raw") else None
+            cur.execute("""
+                INSERT INTO housingcom_pricetrend_data
+                    (city, product, record_type, locality_name, property_type,
                      avg_price_per_sqft, min_price, max_price, total_listings,
-                     trend_raw, scrape_timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     locality_url, has_trend_data, trend_raw, scrape_timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (city, product, record_type, locality_name, property_type)
+                DO NOTHING
             """, (
-                "city_summary", city_name, product,
-                f"OVERALL avg={summary.get('avg_price_per_sqft', '')}",
-                summary.get("avg_price_per_sqft", ""),
-                summary.get("min_price", ""),
-                summary.get("max_price", ""),
-                summary.get("total_listings", ""),
-                None, ts,
+                data.get("city", ""),
+                data.get("product", ""),
+                data.get("record_type", ""),
+                data.get("locality_name", ""),
+                data.get("property_type", ""),
+                data.get("avg_price_per_sqft", ""),
+                data.get("min_price", ""),
+                data.get("max_price", ""),
+                data.get("total_listings", ""),
+                data.get("locality_url", ""),
+                data.get("has_trend_data", ""),
+                trend_raw,
+                data.get("scrape_timestamp", ""),
             ))
 
-            for loc in localities:
-                trend = loc.get("locality_trend", [])
-                cur.execute(f"""
-                    INSERT INTO {table_name}
-                        (record_type, city, product, locality_name, property_type,
-                         avg_price_per_sqft, min_price, max_price, total_listings,
-                         locality_url, has_trend_data, trend_raw, scrape_timestamp)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    "locality", city_name, product, loc["locality_name"],
-                    loc["property_type"],
-                    loc.get("avg_price", ""),
-                    loc.get("min_price", ""),
-                    loc.get("max_price", ""),
-                    loc.get("total_listings", ""),
-                    loc.get("locality_url", ""),
-                    "yes" if trend else "no",
-                    json.dumps(trend) if trend else None,
-                    ts,
-                ))
+    def insert_scrape_result(self, result):
+        if not self.conn:
+            return
+        city = result["city_name"]
+        product = result["product"]
 
-            print(f"  > Created table: {table_name}")
+        if self.has_city_data(city, product):
+            print(f"  [DB] Data already exists for {city} ({product}), skipping")
+            return
+
+        summary = result["summary"]
+        localities = result["localities"]
+        ts = result.get("scrape_timestamp", "")
+
+        for pt_name, pt_data in summary.get("property_type_trends", {}).items():
+            trend = pt_data.get("quarterly_trend", [])
+            self._insert_price_trend_row({
+                "city": city,
+                "product": product,
+                "record_type": "city_trend",
+                "locality_name": "",
+                "property_type": pt_name,
+                "avg_price_per_sqft": summary.get("avg_price_per_sqft", ""),
+                "min_price": summary.get("min_price", ""),
+                "max_price": summary.get("max_price", ""),
+                "total_listings": summary.get("total_listings", ""),
+                "locality_url": "",
+                "has_trend_data": "yes" if trend else "no",
+                "trend_raw": trend,
+                "scrape_timestamp": ts,
+            })
+
+        self._insert_price_trend_row({
+            "city": city,
+            "product": product,
+            "record_type": "city_summary",
+            "locality_name": "",
+            "property_type": f"OVERALL avg={summary.get('avg_price_per_sqft', '')}",
+            "avg_price_per_sqft": summary.get("avg_price_per_sqft", ""),
+            "min_price": summary.get("min_price", ""),
+            "max_price": summary.get("max_price", ""),
+            "total_listings": summary.get("total_listings", ""),
+            "locality_url": "",
+            "has_trend_data": "",
+            "trend_raw": None,
+            "scrape_timestamp": ts,
+        })
+
+        for loc in localities:
+            trend = loc.get("locality_trend", [])
+            self._insert_price_trend_row({
+                "city": city,
+                "product": product,
+                "record_type": "locality",
+                "locality_name": loc["locality_name"],
+                "property_type": loc["property_type"],
+                "avg_price_per_sqft": loc.get("avg_price", ""),
+                "min_price": loc.get("min_price", ""),
+                "max_price": loc.get("max_price", ""),
+                "total_listings": loc.get("total_listings", ""),
+                "locality_url": loc.get("locality_url", ""),
+                "has_trend_data": "yes" if trend else "no",
+                "trend_raw": trend,
+                "scrape_timestamp": ts,
+            })
+
+        print(f"  [DB] Inserted data for {city} ({product})")
 
     def close(self):
         if self.conn:

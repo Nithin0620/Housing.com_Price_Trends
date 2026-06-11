@@ -28,6 +28,9 @@ class PageFetcher:
         self.proxy_manager = proxy_manager
         self.delay = delay
         self.session = requests.Session()
+        if proxy_manager:
+            rot = "rotating (new IP/req)" if proxy_manager.is_rotating else "static (same IP)"
+            print(f"  [FETCHER] Proxy mode: {rot}")
 
     def fetch_html(self, url, impersonate=None):
         time.sleep(self.delay + random.uniform(0, 0.5))
