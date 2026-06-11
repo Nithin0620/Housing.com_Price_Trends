@@ -9,7 +9,7 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     env:
-      DB_URL: ${{ secrets.DB_URL }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       TZ: Asia/Kolkata
 
     steps:
@@ -22,5 +22,5 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run scraper (DB only)
-        run: python main.py --db --no-csv --delay 0.5
+      - name: Run pipeline (Stage 0 + Stage 2, DB only)
+        run: python run_pipeline.py --delay 1.5

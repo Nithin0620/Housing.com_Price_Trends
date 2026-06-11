@@ -8,7 +8,7 @@ from database.db_manager import DatabaseManager
 from proxies.proxy_manager import ProxyManager
 from scraper.fetcher import PageFetcher
 from scraper.city_scraper import CityScraper
-from scraper.output_writer import write_combined_csv
+from scraper.output_writer import write_csv_all
 
 from scripts.extract_all_city_urls import fetch_city_urls, _slugify, BASE_URL
 
@@ -45,6 +45,7 @@ def stage2_scrape_data(db, delay=1.0, proxy_file=None, output_csv=False, limit=0
 
     scraped = 0
     skipped = 0
+    all_csv_results = []
     for city_name, url in sorted(all_urls.items()):
         if limit > 0 and scraped >= limit:
             break
@@ -63,12 +64,17 @@ def stage2_scrape_data(db, delay=1.0, proxy_file=None, output_csv=False, limit=0
             for product, result in results.items():
                 result["scrape_timestamp"] = ts
                 db.insert_scrape_result(result)
-                if output_csv:
-                    write_combined_csv(result, "data")
+
+            if output_csv:
+                all_csv_results.append(results)
 
             scraped += 1
         except Exception as e:
             print(f"  [ERROR] {city_name}: {e}")
+            db.insert_failed(city_name, url, e)
+
+    if output_csv and all_csv_results:
+        write_csv_all(all_csv_results, "data")
 
     return scraped, skipped
 

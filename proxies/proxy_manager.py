@@ -20,12 +20,16 @@ class ProxyManager:
         if not self.proxies:
             self.proxies.append(None)
 
+    def _proxy_username(self):
+        if not self.proxies or self.proxies[0] is None:
+            return ""
+        return self.proxies[0].split("@")[0].split("://")[-1].split(":")[0].lower()
+
     def _log_proxy_info(self):
         if not self.proxies or self.proxies[0] is None:
             print("  [PROXY] No proxy configured — using direct connection")
             return
-        sample = self.proxies[0]
-        if "rotate" in sample.split("@")[0].split(":")[0].split("//")[-1].lower():
+        if "rotate" in self._proxy_username():
             print("  [PROXY] Rotating proxy detected — new IP on every request")
         else:
             print("  [PROXY] Static proxy — same IP for all requests")
@@ -39,10 +43,7 @@ class ProxyManager:
 
     @property
     def is_rotating(self):
-        if not self.proxies or self.proxies[0] is None:
-            return False
-        username = self.proxies[0].split("@")[0].split("://")[-1]
-        return "rotate" in username.lower()
+        return "rotate" in self._proxy_username()
 
     def format_for_curl(self):
         with self.lock:

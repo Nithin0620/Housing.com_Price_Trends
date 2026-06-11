@@ -113,6 +113,15 @@ class DatabaseManager:
                     UNIQUE(city, product, record_type, locality_name, property_type)
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS housingcom_pricetrend_failed (
+                    id SERIAL PRIMARY KEY,
+                    city_name TEXT NOT NULL,
+                    price_trend_url TEXT,
+                    error TEXT,
+                    failed_at TIMESTAMP DEFAULT NOW()
+                );
+            """)
             print("  [DB] Tables ensured")
 
     def insert_city_url(self, city_name, price_trend_url, city_page_url):
@@ -244,6 +253,35 @@ class DatabaseManager:
             })
 
         print(f"  [DB] Inserted data for {city} ({product})")
+
+    def insert_failed(self, city_name, price_trend_url, error):
+        if not self.conn:
+            return
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO housingcom_pricetrend_failed (city_name, price_trend_url, error)
+                VALUES (%s, %s, %s)
+            """, (city_name, price_trend_url, str(error)[:500]))
+
+    def get_failed_cities(self):
+        if not self.conn:
+            return []
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT city_name, price_trend_url, error, failed_at
+                FROM housingcom_pricetrend_failed
+                ORDER BY failed_at DESC
+            """)
+            return cur.fetchall()
+
+    def clear_failed(self, city_name=None):
+        if not self.conn:
+            return
+        with self.conn.cursor() as cur:
+            if city_name:
+                cur.execute("DELETE FROM housingcom_pricetrend_failed WHERE city_name = %s", (city_name,))
+            else:
+                cur.execute("DELETE FROM housingcom_pricetrend_failed")
 
     def close(self):
         if self.conn:

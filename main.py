@@ -4,7 +4,7 @@ from pathlib import Path
 
 from scraper.fetcher import PageFetcher
 from scraper.city_scraper import CityScraper
-from scraper.output_writer import write_combined_csv
+from scraper.output_writer import write_csv_all
 from proxies.proxy_manager import ProxyManager
 
 
@@ -18,10 +18,8 @@ def scrape_url(url, fetcher, output_dir, no_csv=False):
 
     csv_paths = []
     if not no_csv:
-        for product, result in results.items():
-            print(f"\n  --- {product.upper()} ---")
-            csv_path = write_combined_csv(result, output_dir)
-            csv_paths.append(csv_path)
+        csv_path = write_csv_all([results], output_dir)
+        csv_paths.append(csv_path)
 
     return results, csv_paths
 

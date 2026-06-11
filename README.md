@@ -27,26 +27,11 @@ Generates timestamped CSV files: `Housing.com_price_trends_{buy|rent}_HH_MM_SS_D
 ## Usage
 
 ```bash
-#Stage 1 
-python scripts/extract_all_city_urls.py --pretty
-
-# Scrape default (New Delhi buy), save CSV
-python main.py
-
-# Scrape specific URLs
-python main.py https://housing.com/.../property-rates-for-buy-in-mumbai-XXX
-
-# Multiple URLs (works when 50-100 pages exist)
-python main.py url1 url2 url3
-
-# DB only (no CSV)
-python main.py --db --no-csv
-
-# DB + CSV
-python main.py --db
-
-# Custom delay between requests
-python main.py --delay 1.0
+- python run_pipeline.py — full pipeline (Stage 0 URLs → Stage 2 scrape → DB), no CSV
+- python run_pipeline.py --csv — same + single combined CSV
+- python run_pipeline.py --limit 10 — scrape first 10 cities
+- python main.py — single city scrape with CSV
+- python main.py --db --no-csv — single city, DB only
 ```
 
 ## Project Structure
