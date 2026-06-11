@@ -40,3 +40,10 @@ class ProxyManager:
         if proxy is None:
             return None
         return {"http": proxy, "https": proxy}
+
+    def get_curl_proxies(self):
+        """Return curl_cffi-compatible proxies dict or None."""
+        p = self.get_proxy()
+        if p is None:
+            return None
+        return {"http": p["server"], "https": p["server"]}
