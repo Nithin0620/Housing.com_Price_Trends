@@ -12,7 +12,7 @@ def _timestamp():
 def _slugify_url(name):
     s = name.strip().lower()
     s = re.sub(r"[^a-z0-9\s-]", "", s)
-    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"\s+", "_", s)
     return s
 def _construct_city_page_url(city_name):
     return f"https://housing.com/in/buy/real-estate-{_slugify_url(city_name)}"
