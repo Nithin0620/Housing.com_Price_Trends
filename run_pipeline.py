@@ -28,7 +28,8 @@ def stage0_fetch_urls(db):
     return count
 
 
-def stage2_scrape_data(db, delay=1.0, proxy_file=None, output_csv=False, limit=0):
+def stage2_scrape_data(db, delay=1.0, proxy_file=None, output_csv=False, limit=0, _result=None):
+    """Stage 2: scrape all cities. `_result` is an optional dict to receive partial counts on interrupt."""
     print(f"\n{'=' * 60}")
     print(f"Stage 2: Scraping cities without cached data...")
     print(f"{'=' * 60}")
@@ -43,35 +44,58 @@ def stage2_scrape_data(db, delay=1.0, proxy_file=None, output_csv=False, limit=0
         print("  > No URLs found in DB. Run stage 0 first.")
         return 0, 0
 
+    total = len(all_urls)
     scraped = 0
     skipped = 0
     all_csv_results = []
-    for city_name, url in sorted(all_urls.items()):
-        if limit > 0 and scraped >= limit:
-            break
-        has_buy = db.has_city_data(city_name, "buy")
-        has_rent = db.has_city_data(city_name, "rent")
-        if has_buy and has_rent:
-            skipped += 1
-            continue
+    try:
+        for idx, (city_name, url) in enumerate(sorted(all_urls.items()), 1):
+            if limit > 0 and scraped >= limit:
+                break
+            if db.has_city_data(city_name):
+                skipped += 1
+                if output_csv:
+                    print(f"  [{idx}/{total}] {city_name} - skipped (cached)")
+                continue
 
-        print(f"\n  Scraping: {city_name}")
-        try:
-            scraper = CityScraper(fetcher, output_dir="data")
-            results = scraper.scrape(url)
+            print(f"\n  [{idx}/{total}] Scraping: {city_name}")
+            try:
+                scraper = CityScraper(fetcher, output_dir="data")
+                results = scraper.scrape(url)
 
-            ts = datetime.now().strftime("%H_%M_%S_%d_%m__%y")
-            for product, result in results.items():
-                result["scrape_timestamp"] = ts
-                db.insert_scrape_result(result)
+                page_name = next(iter(results.values()))["city_name"]
+                use_name = page_name if page_name != city_name else city_name
+                if page_name != city_name:
+                    print(f"  [INFO] City name mismatch: URL table says '{city_name}', page says '{page_name}' — renaming URL entry to '{page_name}'")
+                    db.rename_city_url(city_name, page_name)
 
-            if output_csv:
-                all_csv_results.append(results)
+                ts = datetime.now().strftime("%H_%M_%S_%d_%m__%y")
+                inserted_any = False
+                for product, result in results.items():
+                    result["city_name"] = use_name
+                    for loc in result["localities"]:
+                        loc["city"] = use_name
+                    result["scrape_timestamp"] = ts
+                    if db.insert_scrape_result(result):
+                        inserted_any = True
+                    else:
+                        skipped += 1
 
-            scraped += 1
-        except Exception as e:
-            print(f"  [ERROR] {city_name}: {e}")
-            db.insert_failed(city_name, url, e)
+                if output_csv:
+                    all_csv_results.append(results)
+
+                if inserted_any:
+                    scraped += 1
+            except Exception as e:
+                print(f"  [ERROR] {city_name}: {e}")
+                db.insert_failed(city_name, url, e)
+    except KeyboardInterrupt:
+        print(f"\n\n  [!] Interrupted by user")
+        if _result is not None:
+            _result["scraped"] = scraped
+            _result["skipped"] = skipped
+            _result["interrupted"] = True
+        raise
 
     if output_csv and all_csv_results:
         write_csv_all(all_csv_results, "data")
@@ -104,12 +128,17 @@ def main():
 
     stage0_fetch_urls(db)
 
-    scraped, skipped = stage2_scrape_data(db, delay=args.delay, proxy_file=args.proxy_file, output_csv=args.csv, limit=args.limit)
+    result = {"scraped": 0, "skipped": 0, "interrupted": False}
+    try:
+        scraped, skipped = stage2_scrape_data(db, delay=args.delay, proxy_file=args.proxy_file, output_csv=args.csv, limit=args.limit, _result=result)
+    except KeyboardInterrupt:
+        pass  # partial counts already in result
 
     db.close()
 
     print(f"\n{'=' * 60}")
-    print(f"Pipeline complete! Scraped: {scraped}, Skipped (cached): {skipped}")
+    status = "Interrupted" if result["interrupted"] else "Complete"
+    print(f"Pipeline {status}! Scraped: {result['scraped']}, Skipped (cached): {result['skipped']}")
     print(f"{'=' * 60}")
 
 

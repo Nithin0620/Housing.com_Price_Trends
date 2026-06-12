@@ -56,8 +56,19 @@ class DatabaseManager:
             print(f"  [DB] Connection failed: {e}")
             return False
 
-    def ensure_tables(self):
+    def _ensure_conn(self):
         if not self.conn:
+            return self.connect()
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT 1")
+        except Exception:
+            print("  [DB] Reconnecting...")
+            return self.connect()
+        return True
+
+    def ensure_tables(self):
+        if not self._ensure_conn():
             return
         with self.conn.cursor() as cur:
             cur.execute("SELECT to_regclass('public.housingcom_pricetrend_url')")
@@ -125,7 +136,7 @@ class DatabaseManager:
             print("  [DB] Tables ensured")
 
     def insert_city_url(self, city_name, price_trend_url, city_page_url):
-        if not self.conn:
+        if not self._ensure_conn():
             return False
         with self.conn.cursor() as cur:
             cur.execute("""
@@ -135,8 +146,19 @@ class DatabaseManager:
             """, (city_name, price_trend_url, city_page_url))
             return cur.rowcount > 0
 
+    def rename_city_url(self, old_name, new_name):
+        if not self._ensure_conn():
+            return False
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                UPDATE housingcom_pricetrend_url
+                SET city_name = %s
+                WHERE city_name = %s
+            """, (new_name, old_name))
+            return cur.rowcount > 0
+
     def get_all_city_urls(self):
-        if not self.conn:
+        if not self._ensure_conn():
             return []
         with self.conn.cursor() as cur:
             cur.execute("""
@@ -146,19 +168,18 @@ class DatabaseManager:
             """)
             return cur.fetchall()
 
-    def has_city_data(self, city, product):
-        if not self.conn:
+    def has_city_data(self, city, product=None):
+        if not self._ensure_conn():
             return False
         with self.conn.cursor() as cur:
-            cur.execute("""
-                SELECT 1 FROM housingcom_pricetrend_data
-                WHERE city = %s AND product = %s
-                LIMIT 1
-            """, (city, product))
+            if product:
+                cur.execute("SELECT 1 FROM housingcom_pricetrend_data WHERE city=%s AND product=%s LIMIT 1", (city, product))
+            else:
+                cur.execute("SELECT 1 FROM housingcom_pricetrend_data WHERE city=%s LIMIT 1", (city,))
             return cur.fetchone() is not None
 
     def _insert_price_trend_row(self, data):
-        if not self.conn:
+        if not self._ensure_conn():
             return
         with self.conn.cursor() as cur:
             trend_raw = json.dumps(data["trend_raw"]) if data.get("trend_raw") else None
@@ -187,14 +208,14 @@ class DatabaseManager:
             ))
 
     def insert_scrape_result(self, result):
-        if not self.conn:
-            return
+        if not self._ensure_conn():
+            return False
         city = result["city_name"]
         product = result["product"]
 
         if self.has_city_data(city, product):
             print(f"  [DB] Data already exists for {city} ({product}), skipping")
-            return
+            return False
 
         summary = result["summary"]
         localities = result["localities"]
@@ -253,9 +274,10 @@ class DatabaseManager:
             })
 
         print(f"  [DB] Inserted data for {city} ({product})")
+        return True
 
     def insert_failed(self, city_name, price_trend_url, error):
-        if not self.conn:
+        if not self._ensure_conn():
             return
         with self.conn.cursor() as cur:
             cur.execute("""
@@ -264,7 +286,7 @@ class DatabaseManager:
             """, (city_name, price_trend_url, str(error)[:500]))
 
     def get_failed_cities(self):
-        if not self.conn:
+        if not self._ensure_conn():
             return []
         with self.conn.cursor() as cur:
             cur.execute("""
@@ -275,13 +297,19 @@ class DatabaseManager:
             return cur.fetchall()
 
     def clear_failed(self, city_name=None):
-        if not self.conn:
+        if not self._ensure_conn():
             return
         with self.conn.cursor() as cur:
             if city_name:
                 cur.execute("DELETE FROM housingcom_pricetrend_failed WHERE city_name = %s", (city_name,))
             else:
                 cur.execute("DELETE FROM housingcom_pricetrend_failed")
+
+    def delete_city_data(self, city):
+        if not self._ensure_conn():
+            return
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM housingcom_pricetrend_data WHERE city = %s", (city,))
 
     def close(self):
         if self.conn:
